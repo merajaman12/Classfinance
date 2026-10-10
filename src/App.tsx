@@ -123,11 +123,39 @@ export default function App() {
     const { error: e } = await supabase.from('committee_tasks').update({ status }).eq('id', task.id)
     if (e) setError(e.message); else { setSuccess('Task updated.'); await loadData() }
   }
-  function exportCsv() {
-    const rows = [['Date', 'Type', 'Description', 'Amount PKR', 'Reference', 'Event'], ...filteredTransactions.map(t => [t.occurred_on, t.kind, t.description, String(t.amount_pkr), t.reference, events.find(e => e.id === t.event_id)?.title || ''])]
-    const csv = rows.map(row => row.map(cell => `"${String(cell ?? '').replace(/"/g, '""').join(',')).join('\r\n')
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' }); const url = URL.createObjectURL(blob)
-    const a = document.createElement('a'); a.href = url; a.download = 'mrj-treasury-transactions.csv'; a.click(); URL.revokeObjectURL(url)
+  
+function exportCsv() {
+  const rows = [
+    ['Date', 'Type', 'Description', 'Amount PKR', 'Reference', 'Event'],
+    ...filteredTransactions.map((t) => [
+      t.occurred_on,
+      t.kind,
+      t.description,
+      String(t.amount_pkr),
+      t.reference ?? '',
+      t.event_id ?? '',
+    ]),
+  ];
+
+  const csv = rows
+    .map((row) =>
+      row
+        .map((cell) => `"${String(cell ?? '').replace(/"/g, '""')}"`)
+        .join(',')
+    )
+    .join('\r\n');
+
+  const blob = new Blob([csv], {
+    type: 'text/csv;charset=utf-8;',
+  });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'mrj-treasury-transactions.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
   }
 
   if (!isSupabaseConfigured) return <SetupScreen />
