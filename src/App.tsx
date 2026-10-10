@@ -1,132 +1,156 @@
 
-import { useEffect, useMemo, useState, type FormEvent } from 'react'
+import { useCallback, useEffect, useState, type FormEvent } from 'react'
 import type { Session } from '@supabase/supabase-js'
 import {
   Wallet, CalendarDays, Plus, Search, Download, Menu, X,
   ChevronRight, CheckCircle2, CircleAlert, ArrowLeft,
-  FileSpreadsheet
+  FileSpreadsheet, RefreshCw
 } from 'lucide-react'
 import { supabase } from './lib/supabase'
 import { signInWithGitHub, signOut } from './lib/auth'
 
-type PaymentMethod = 'Online' | 'Cash' | 'Bank transfer' | 'Unpaid'
-type StudentPayment = {
-  id: number; roll: string; name: string; amount: number
-  poc: string; date: string; method: PaymentMethod; paid: boolean
+type Student = {
+  id: string
+  roll_number: string
+  full_name: string
 }
-type EventSheet = {
-  id: number; name: string; date: string; poc: string
-  target: number; students: StudentPayment[]
+
+type EventRow = {
+  id: string
+  name: string
+  event_date: string | null
+  budget_pkr: number
+}
+
+type Contribution = {
+  id: string
+  event_id: string
+  student_id: string
+  expected_pkr: number
+  paid_pkr: number
+  paid_on: string | null
+  payment_method: string | null
+  collected_by: string | null
 }
 
 const today = new Date().toISOString().slice(0, 10)
-const money = (n: number) =>
+
+const money = (value: number) =>
   new Intl.NumberFormat('en-PK', {
-    style: 'currency', currency: 'PKR', maximumFractionDigits: 0
-  }).format(n)
-
-const seedStudents = (): StudentPayment[] => [
-  {id:1,roll:'103',name:'Moiz Khan',amount:0,poc:'Meraj Ahmed',date:'',method:'Unpaid',paid:false},
-  {id:2,roll:'107',name:'Muhammad Moosa',amount:3000,poc:'Meraj Ahmed',date:'2026-10-10',method:'Online',paid:true},
-  {id:3,roll:'113',name:'Dilawar',amount:2000,poc:'Meraj Ahmed',date:'2026-10-10',method:'Cash',paid:true},
-  {id:4,roll:'115',name:'Ahmed Shah',amount:3000,poc:'Meraj Ahmed',date:'2026-10-09',method:'Online',paid:true},
-  {id:5,roll:'116',name:'Abdul Baseer',amount:3000,poc:'Meraj Ahmed',date:'2026-10-09',method:'Cash',paid:true},
-  {id:6,roll:'122',name:'Syed Muhammad Musa',amount:3000,poc:'Meraj Ahmed',date:'2026-10-08',method:'Online',paid:true},
-  {id:7,roll:'123',name:'Meraj Ahmed',amount:3000,poc:'Meraj Ahmed',date:'2026-10-08',method:'Online',paid:true},
-  {id:8,roll:'124',name:'Shawal Ghaffar Kakar',amount:3000,poc:'Meraj Ahmed',date:'2026-10-08',method:'Online',paid:true},
-  {id:9,roll:'126',name:'Abdul Wahab',amount:3000,poc:'Meraj Ahmed',date:'2026-10-07',method:'Online',paid:true},
-  {id:10,roll:'129',name:'Ronak Sani',amount:0,poc:'Meraj Ahmed',date:'',method:'Unpaid',paid:false},
-  {id:11,roll:'131',name:'Ali Haidar',amount:3000,poc:'Meraj Ahmed',date:'2026-10-07',method:'Cash',paid:true},
-  {id:12,roll:'138',name:'Musawer Khan',amount:3000,poc:'Meraj Ahmed',date:'2026-10-06',method:'Cash',paid:true},
-  {id:13,roll:'140',name:'Yasir Khan',amount:3000,poc:'Meraj Ahmed',date:'2026-10-06',method:'Cash',paid:true},
-  {id:14,roll:'141',name:'Taimoor Ahmed',amount:3000,poc:'Meraj Ahmed',date:'2026-10-06',method:'Online',paid:true},
-  {id:15,roll:'143',name:'Zohib Manzoor',amount:0,poc:'Meraj Ahmed',date:'',method:'Unpaid',paid:false},
-  {id:16,roll:'145',name:'Muneer Ahmed',amount:0,poc:'Meraj Ahmed',date:'',method:'Unpaid',paid:false},
-  {id:17,roll:'148',name:'Muhammad Uqail',amount:3000,poc:'Meraj Ahmed',date:'2026-10-05',method:'Online',paid:true},
-  {id:18,roll:'149',name:'Adnan Ismail',amount:3000,poc:'Meraj Ahmed',date:'2026-10-05',method:'Online',paid:true},
-  {id:19,roll:'150',name:'Fahad',amount:0,poc:'Meraj Ahmed',date:'',method:'Unpaid',paid:false},
-  {id:20,roll:'120',name:'Hassan',amount:3000,poc:'Meraj Ahmed',date:'2026-10-04',method:'Cash',paid:true}
-]
-
-const seedEvents: EventSheet[] = [
-  {id:1,name:'Welcome Party',date:'2026-11-02',poc:'Meraj Ahmed',target:3000,students:seedStudents()},
-  {id:2,name:'Class Dinner',date:'2026-11-20',poc:'Meraj Ahmed',target:2500,students:seedStudents().map(s=>({...s,id:s.id+100,amount:s.paid?2500:0,method:s.paid?s.method:'Unpaid'}))},
-  {id:3,name:'Class Trip',date:'2026-12-05',poc:'CR Committee',target:5000,students:seedStudents().map(s=>({...s,id:s.id+200,amount:s.paid?5000:0,method:s.paid?s.method:'Unpaid'}))}
-]
+    style: 'currency',
+    currency: 'PKR',
+    maximumFractionDigits: 0
+  }).format(value || 0)
 
 export default function App() {
   const [session, setSession] = useState<Session | null>(null)
-  const [role, setRole] = useState<string | null>(null)
-  const [authLoading, setAuthLoading] = useState(true)
-  const [authError, setAuthError] = useState('')
-
-  const [events, setEvents] = useState<EventSheet[]>(seedEvents)
-  const [selected, setSelected] = useState<number | null>(null)
-  const [tab, setTab] = useState<'Overview' | 'Events & registers'>('Overview')
-  const [menu, setMenu] = useState(false)
-  const [search, setSearch] = useState('')
-  const [statusFilter, setStatusFilter] = useState('All')
-  const [showPayment, setShowPayment] = useState(false)
-  const [showEvent, setShowEvent] = useState(false)
+  const [role, setRole] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
 
-  const [studentId, setStudentId] = useState('')
-  const [paidAmount, setPaidAmount] = useState('')
-  const [method, setMethod] = useState<PaymentMethod>('Online')
-  const [payDate, setPayDate] = useState(today)
-  const [payPoc, setPayPoc] = useState('Meraj Ahmed')
+  const [students, setStudents] = useState<Student[]>([])
+  const [events, setEvents] = useState<EventRow[]>([])
+  const [contributions, setContributions] = useState<Contribution[]>([])
+  const [selected, setSelected] = useState<string | null>(null)
+  const [menu, setMenu] = useState(false)
+  const [search, setSearch] = useState('')
+  const [filter, setFilter] = useState('All')
+  const [showEvent, setShowEvent] = useState(false)
+  const [showPayment, setShowPayment] = useState(false)
 
   const [eventName, setEventName] = useState('')
   const [eventDate, setEventDate] = useState(today)
-  const [eventTarget, setEventTarget] = useState('3000')
-  const [eventPoc, setEventPoc] = useState('Meraj Ahmed')
+  const [target, setTarget] = useState('3000')
+  const [paymentId, setPaymentId] = useState('')
+  const [amount, setAmount] = useState('')
+  const [method, setMethod] = useState('Cash')
+  const [paymentDate, setPaymentDate] = useState(today)
+
+  const current = events.find(e => e.id === selected) ?? null
+
+  const loadData = useCallback(async () => {
+    if (!supabase) return
+
+    setBusy(true)
+    setError('')
+
+    try {
+      const [studentResult, eventResult, contributionResult] =
+        await Promise.all([
+          supabase.from('students')
+            .select('id,roll_number,full_name')
+            .order('full_name'),
+          supabase.from('events')
+            .select('id,name,event_date,budget_pkr')
+            .order('event_date'),
+          supabase.from('event_contributions')
+            .select('id,event_id,student_id,expected_pkr,paid_pkr,paid_on,payment_method,collected_by')
+        ])
+
+      if (studentResult.error) throw studentResult.error
+      if (eventResult.error) throw eventResult.error
+      if (contributionResult.error) throw contributionResult.error
+
+      setStudents((studentResult.data ?? []) as Student[])
+      setEvents((eventResult.data ?? []) as EventRow[])
+      setContributions((contributionResult.data ?? []) as Contribution[])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not load database records.')
+    } finally {
+      setBusy(false)
+    }
+  }, [])
 
   useEffect(() => {
     if (!supabase) {
-      setAuthLoading(false)
+      setLoading(false)
       return
     }
 
     let active = true
 
-    async function loadSession(currentSession: Session | null) {
+    async function checkSession(next: Session | null) {
       if (!active) return
-      setSession(currentSession)
-      setRole(null)
+      setSession(next)
+      setRole('')
 
-      if (!currentSession) {
-        setAuthLoading(false)
+      if (!next) {
+        setLoading(false)
         return
       }
 
-      const { data, error } = await supabase!
+      const { data, error: profileError } = await supabase!
         .from('profiles')
         .select('role')
-        .eq('id', currentSession.user.id)
+        .eq('id', next.user.id)
         .maybeSingle()
 
       if (!active) return
 
-      if (error) {
-        setAuthError('Could not verify your account role. Please try again.')
-      } else if (data?.role === 'finance_manager' || data?.role === 'cr') {
+      if (profileError) {
+        setError('Unable to verify your account role: ' + profileError.message)
+      } else if (
+        data?.role === 'finance_manager' ||
+        data?.role === 'cr'
+      ) {
         setRole(data.role)
-        setAuthError('')
       } else {
-        setAuthError('Your account has no authorized role. Contact the finance manager.')
+        setError('This GitHub account does not have an authorized profile.')
       }
 
-      setAuthLoading(false)
+      setLoading(false)
     }
 
     supabase.auth.getSession().then(({ data, error }) => {
-      if (error) setAuthError(error.message)
-      void loadSession(data.session)
+      if (error) setError(error.message)
+      void checkSession(data.session)
     })
 
     const { data: listener } = supabase.auth.onAuthStateChange(
-      (_event, newSession) => {
-        void loadSession(newSession)
+      (_event, next) => {
+        void checkSession(next)
       }
     )
 
@@ -136,292 +160,443 @@ export default function App() {
     }
   }, [])
 
-  const current = events.find(e => e.id === selected) ?? null
+  useEffect(() => {
+    if (session && role) void loadData()
+  }, [session, role, loadData])
 
-  const allStats = useMemo(() => events.reduce((acc, e) => {
-    const paid = e.students.filter(s => s.paid)
-    acc.collected += paid.reduce((a, s) => a + s.amount, 0)
-    acc.paidCount += paid.length
-    acc.unpaidCount += e.students.length - paid.length
-    acc.due += e.students.filter(s => !s.paid).length * e.target
-    return acc
-  }, {collected:0,paidCount:0,unpaidCount:0,due:0}), [events])
+  const rows = current
+    ? students.map(student => ({
+        student,
+        contribution: contributions.find(c =>
+          c.event_id === current.id && c.student_id === student.id
+        )
+      })).filter(row => {
+        const c = row.contribution
+        const paid = Boolean(c && Number(c.paid_pkr) > 0)
+        const text = `${row.student.roll_number} ${row.student.full_name}`
+          .toLowerCase()
 
-  const currentStats = current ? {
-    collected: current.students.filter(s => s.paid).reduce((a,s) => a+s.amount,0),
-    paid: current.students.filter(s => s.paid).length,
-    unpaid: current.students.filter(s => !s.paid).length,
-    target: current.students.length * current.target
-  } : null
-
-  const visibleStudents = current
-    ? current.students.filter(s =>
-        (`${s.roll} ${s.name} ${s.method} ${s.poc}`)
-          .toLowerCase().includes(search.toLowerCase()) &&
-        (statusFilter === 'All' || (statusFilter === 'Paid' ? s.paid : !s.paid))
-      )
+        return text.includes(search.toLowerCase()) &&
+          (filter === 'All' ||
+           (filter === 'Paid' && paid) ||
+           (filter === 'Unpaid' && !paid))
+      })
     : []
 
-  function openEvent(id: number) {
-    setSelected(id)
-    setTab('Events & registers')
-    setSearch('')
-    setStatusFilter('All')
-    setMenu(false)
-  }
+  const eventContributions = current
+    ? contributions.filter(c => c.event_id === current.id)
+    : []
 
-  function addPayment(e: FormEvent) {
-    e.preventDefault()
-    if (!current || !studentId) return
+  const collected = eventContributions.reduce(
+    (sum, c) => sum + Number(c.paid_pkr || 0), 0
+  )
 
-    const amount = Number(paidAmount)
-    if (!Number.isFinite(amount) || amount <= 0) {
-      setNotice('Enter a valid payment amount.')
+  const paidCount = eventContributions.filter(
+    c => Number(c.paid_pkr) > 0
+  ).length
+
+  const unpaidCount = Math.max(0, students.length - paidCount)
+
+  const allCollected = contributions.reduce(
+    (sum, c) => sum + Number(c.paid_pkr || 0), 0
+  )
+
+  async function initializeRegister(event: EventRow) {
+    if (!supabase || role !== 'finance_manager') return
+
+    const existingIds = new Set(
+      contributions
+        .filter(c => c.event_id === event.id)
+        .map(c => c.student_id)
+    )
+
+    const missing = students.filter(s => !existingIds.has(s.id))
+
+    if (!missing.length) {
+      setNotice('This event already has a register for every student.')
       return
     }
 
-    setEvents(prev => prev.map(ev => ev.id !== current.id ? ev : {
-      ...ev,
-      students: ev.students.map(s => String(s.id) === studentId
-        ? {...s,amount,poc:payPoc,date:payDate,method,paid:true}
-        : s)
-    }))
+    setBusy(true)
+    setError('')
 
-    setShowPayment(false)
-    setStudentId('')
-    setPaidAmount('')
-    setNotice('Demo payment recorded. It is temporary and will reset when the page reloads.')
+    try {
+      const { error } = await supabase
+        .from('event_contributions')
+        .insert(missing.map(student => ({
+          event_id: event.id,
+          student_id: student.id,
+          expected_pkr: Number(target) > 0
+            ? Number(target)
+            : Math.round(Number(event.budget_pkr || 0) /
+                Math.max(students.length, 1)),
+          paid_pkr: 0,
+          paid_on: null,
+          payment_method: null,
+          collected_by: null
+        })))
+
+      if (error) throw error
+
+      await loadData()
+      setNotice(`Added ${missing.length} unpaid student entries.`)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not initialize register.')
+    } finally {
+      setBusy(false)
+    }
   }
 
-  function addEvent(e: FormEvent) {
+  async function createEvent(e: FormEvent) {
     e.preventDefault()
-    if (!eventName.trim() || Number(eventTarget) <= 0) return
 
-    const id = Date.now()
-    const newEvent: EventSheet = {
-      id,
-      name: eventName.trim(),
-      date: eventDate,
-      poc: eventPoc,
-      target: Number(eventTarget),
-      students: seedStudents().map(s => ({
-        ...s, id: s.id + id, amount: 0, method: 'Unpaid', paid: false, date: ''
-      }))
+    if (!supabase || role !== 'finance_manager') return
+    if (!eventName.trim() || Number(target) <= 0) return
+
+    if (!students.length) {
+      setError('No students found. Add the student roster before creating an event.')
+      return
     }
 
-    setEvents(prev => [newEvent, ...prev])
-    setEventName('')
-    setShowEvent(false)
-    openEvent(id)
-    setNotice('Demo event created. It will reset when the page reloads.')
+    setBusy(true)
+    setError('')
+
+    try {
+      const { data, error } = await supabase
+        .from('events')
+        .insert({
+          name: eventName.trim(),
+          event_date: eventDate || null,
+          budget_pkr: Number(target) * students.length
+        })
+        .select('id,name,event_date,budget_pkr')
+        .single()
+
+      if (error) throw error
+
+      const newEvent = data as EventRow
+
+      const { error: contributionError } = await supabase
+        .from('event_contributions')
+        .insert(students.map(student => ({
+          event_id: newEvent.id,
+          student_id: student.id,
+          expected_pkr: Number(target),
+          paid_pkr: 0,
+          paid_on: null,
+          payment_method: null,
+          collected_by: null
+        })))
+
+      if (contributionError) {
+        setNotice('Event was saved, but register creation failed. Open the event and retry register setup.')
+        await loadData()
+        setSelected(newEvent.id)
+        setShowEvent(false)
+        return
+      }
+
+      setEventName('')
+      setShowEvent(false)
+      await loadData()
+      setSelected(newEvent.id)
+      setSearch('')
+      setFilter('All')
+      setNotice('Event and unpaid student register saved to Supabase.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save event.')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function savePayment(e: FormEvent) {
+    e.preventDefault()
+
+    if (!supabase || !session || role !== 'finance_manager') return
+
+    const payment = contributions.find(c => c.id === paymentId)
+    const received = Number(amount)
+
+    if (!payment || !Number.isFinite(received) || received <= 0) {
+      setError('Choose a student entry and enter a valid positive amount.')
+      return
+    }
+
+    setBusy(true)
+    setError('')
+
+    try {
+      const { error } = await supabase
+        .from('event_contributions')
+        .update({
+          paid_pkr: received,
+          paid_on: paymentDate,
+          payment_method: method,
+          collected_by: session.user.id
+        })
+        .eq('id', payment.id)
+        .eq('event_id', payment.event_id)
+
+      if (error) throw error
+
+      setShowPayment(false)
+      setPaymentId('')
+      setAmount('')
+      await loadData()
+      setNotice('Payment saved permanently to Supabase.')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Could not save payment.')
+    } finally {
+      setBusy(false)
+    }
   }
 
   function exportCsv() {
     if (!current) return
 
-    const rows = [
+    const data = [
       ['Event', current.name],
-      ['Roll No','Student Name','Expected Amount PKR','Amount Paid PKR','Payment Status','POC','Date','Payment Method'],
-      ...current.students.map(s => [
-        s.roll, s.name, String(current.target), String(s.paid ? s.amount : 0),
-        s.paid ? 'Paid' : 'Unpaid', s.poc, s.date, s.method
-      ])
+      ['Roll No', 'Student Name', 'Expected PKR', 'Paid PKR', 'Status', 'Date', 'Method'],
+      ...students.map(student => {
+        const c = contributions.find(item =>
+          item.event_id === current.id && item.student_id === student.id
+        )
+        const paid = Number(c?.paid_pkr || 0)
+
+        return [
+          student.roll_number,
+          student.full_name,
+          String(c?.expected_pkr ?? 0),
+          String(paid),
+          paid > 0 ? 'Paid' : 'Unpaid',
+          c?.paid_on ?? '',
+          c?.payment_method ?? ''
+        ]
+      })
     ]
 
-    const csv = rows.map(r => r.map(c =>
-      `"${String(c ?? '').replace(/"/g,'""')}"`
+    const csv = data.map(row => row.map(value =>
+      `"${String(value ?? '').replace(/"/g, '""')}"`
     ).join(',')).join('\r\n')
 
-    const url = URL.createObjectURL(new Blob([csv], {type:'text/csv;charset=utf-8;'}))
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `mrj-${current.name.toLowerCase().replace(/[^a-z0-9]+/g,'-')}-register.csv`
-    a.click()
+    const url = URL.createObjectURL(
+      new Blob([csv], { type: 'text/csv;charset=utf-8;' })
+    )
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `mrj-${current.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.csv`
+    link.click()
     URL.revokeObjectURL(url)
   }
 
-  if (authLoading) {
-    return <div className="event-app" style={{padding:32}}>Checking your login…</div>
+  if (loading) {
+    return <div className="event-app" style={{ padding: 32 }}>Checking login…</div>
   }
 
   if (!supabase) {
-    return (
-      <div className="event-app" style={{padding:32}}>
-        <h1>MrJ Treasury</h1>
-        <p>Supabase is not configured. Check your GitHub Actions variables.</p>
-      </div>
-    )
+    return <div className="event-app" style={{ padding: 32 }}>
+      Supabase is not configured. Check GitHub Actions variables.
+    </div>
   }
 
   if (!session || !role) {
-    return (
-      <div className="event-app" style={{padding:32,textAlign:'center'}}>
-        <div className="ev-logo" style={{margin:'0 auto 16px'}}><Wallet/></div>
-        <h1>MrJ Treasury</h1>
-        <p>Sign in with your authorized GitHub account to continue.</p>
-        {authError && <p role="alert">{authError}</p>}
-        {!session ? (
-          <button className="ev-btn primary" onClick={() => {
-            setAuthError('')
-            signInWithGitHub().catch(e => setAuthError(e.message))
-          }}>
-            Continue with GitHub
-          </button>
-        ) : (
-          <>
-            <p>Your account is signed in, but its role has not been authorized.</p>
-            <button className="ev-btn secondary" onClick={() => signOut().catch(e=>setAuthError(e.message))}>
-              Sign out
-            </button>
-          </>
-        )}
-      </div>
-    )
+    return <div className="event-app" style={{ padding: 32, textAlign: 'center' }}>
+      <div className="ev-logo" style={{ margin: '0 auto 16px' }}><Wallet /></div>
+      <h1>MrJ Treasury</h1>
+      <p>Sign in with your authorized GitHub account.</p>
+      {error && <p role="alert">{error}</p>}
+      {!session
+        ? <button className="ev-btn primary" onClick={() =>
+            signInWithGitHub().catch(e =>
+              setError(e instanceof Error ? e.message : 'Login failed.')
+            )
+          }>Continue with GitHub</button>
+        : <button className="ev-btn secondary" onClick={() =>
+            signOut().catch(e => setError(String(e)))
+          }>Sign out</button>}
+    </div>
   }
 
   return (
     <div className="event-app">
       <header className="ev-top">
-        <button className="ev-iconbtn" onClick={() => setMenu(true)} aria-label="Open menu"><Menu/></button>
+        <button className="ev-iconbtn" onClick={() => setMenu(true)} aria-label="Open menu"><Menu /></button>
         <div className="ev-brand">
-          <div className="ev-logo"><Wallet/></div>
+          <div className="ev-logo"><Wallet /></div>
           <div><b>MrJ Treasury</b><span>CLASS FINANCE PORTAL</span></div>
         </div>
-        <button className="ev-btn secondary" onClick={() => signOut().catch(e=>setNotice(e.message))}>Sign out</button>
+        <button className="ev-btn secondary" onClick={() => signOut()}>Sign out</button>
       </header>
 
       {menu && <div className="ev-menu-back" onClick={() => setMenu(false)}>
         <nav className="ev-menu" onClick={e => e.stopPropagation()}>
-          <button className="ev-close" onClick={() => setMenu(false)}><X/></button>
+          <button className="ev-close" onClick={() => setMenu(false)}><X /></button>
           <h2>MrJ Treasury</h2>
-          <button onClick={() => {setTab('Overview');setSelected(null);setMenu(false)}}>Overview</button>
-          <button onClick={() => {setTab('Events & registers');setSelected(null);setMenu(false)}}>Events & registers</button>
-          <p>Each event has its own separate demo register.</p>
+          <button onClick={() => { setSelected(null); setMenu(false) }}>Overview</button>
+          <button onClick={() => { setSelected(null); setMenu(false) }}>Events & registers</button>
+          <p>Signed in as {session.user.email || session.user.id}</p>
         </nav>
       </div>}
 
       <main className="ev-main">
         <div className="ev-warning">
-          <CircleAlert size={18}/>
-          <span><b>DEMO MODE:</b> Sample records only. Changes are temporary and reset when the page reloads. Do not enter real finance records yet.</span>
+          <CircleAlert size={18} />
+          <span><b>LIVE DATABASE:</b> Events and payments are read from and saved to Supabase.</span>
         </div>
 
-        {notice && <div className="ev-notice">{notice}<button onClick={() => setNotice('')}><X size={16}/></button></div>}
+        {error && <div className="ev-notice" role="alert">{error}<button onClick={() => setError('')}><X size={16} /></button></div>}
+        {notice && <div className="ev-notice">{notice}<button onClick={() => setNotice('')}><X size={16} /></button></div>}
 
-        {tab === 'Overview' && !selected && <>
-          <div className="ev-heading">
-            <div><div className="ev-kicker">CLASS FINANCE WORKSPACE</div><h1>Event collection registers</h1><p>Keep every event's student payments and totals separate.</p></div>
-            <button className="ev-btn primary" onClick={() => setShowEvent(true)}><Plus size={17}/> Create event</button>
+        <div className="ev-heading">
+          <div>
+            <div className="ev-kicker">CLASS FINANCE WORKSPACE</div>
+            <h1>{current ? current.name : 'Event collection registers'}</h1>
+            <p>{current ? `Event date: ${current.event_date || 'Not set'}` : 'Manage separate event registers and student payments.'}</p>
           </div>
+          <div className="ev-head-actions">
+            <button className="ev-btn secondary" onClick={() => void loadData()} disabled={busy}><RefreshCw size={16} /> Refresh</button>
+            {!current && role === 'finance_manager' && <button className="ev-btn primary" onClick={() => setShowEvent(true)}><Plus size={17} /> Create event</button>}
+          </div>
+        </div>
 
+        {!current ? <>
           <section className="ev-stats">
-            <article><span>Total collected across events</span><b>{money(allStats.collected)}</b></article>
-            <article><span>Paid entries</span><b>{allStats.paidCount}</b></article>
-            <article><span>Unpaid entries</span><b>{allStats.unpaidCount}</b></article>
+            <article><span>Total collected across events</span><b>{money(allCollected)}</b></article>
+            <article><span>Students</span><b>{students.length}</b></article>
             <article><span>Events</span><b>{events.length}</b></article>
+            <article><span>Role</span><b>{role === 'finance_manager' ? 'Finance Manager' : 'CR'}</b></article>
           </section>
 
-          <div className="ev-section-title"><div><h2>Separate event sheets</h2><p>Open an event to view its own collection register.</p></div><FileSpreadsheet/></div>
+          {!students.length && <div className="ev-warning">
+            No students were found in the database. Add your roster in Supabase before creating an event.
+          </div>}
+
+          <div className="ev-section-title"><div><h2>Events from Supabase</h2><p>Each event has its own independent register.</p></div><FileSpreadsheet /></div>
 
           <div className="ev-event-grid">
-            {events.map(ev => {
-              const collected = ev.students.filter(s=>s.paid).reduce((a,s)=>a+s.amount,0)
-              const paid = ev.students.filter(s=>s.paid).length
-              const unpaid = ev.students.length-paid
-              return <article className="ev-event-card" key={ev.id}>
-                <div className="ev-event-icon"><CalendarDays/></div>
-                <span className="ev-chip">SEPARATE REGISTER</span>
-                <h3>{ev.name}</h3>
-                <p className="ev-event-date">{ev.date || 'Date not set'} · POC: {ev.poc}</p>
+            {events.map(event => {
+              const items = contributions.filter(c => c.event_id === event.id)
+              const total = items.reduce((sum, c) => sum + Number(c.paid_pkr || 0), 0)
+              const paid = items.filter(c => Number(c.paid_pkr) > 0).length
+
+              return <article className="ev-event-card" key={event.id}>
+                <div className="ev-event-icon"><CalendarDays /></div>
+                <span className="ev-chip">DATABASE REGISTER</span>
+                <h3>{event.name}</h3>
+                <p className="ev-event-date">{event.event_date || 'Date not set'}</p>
                 <div className="ev-event-metrics">
-                  <div><span>Collected</span><b>{money(collected)}</b></div>
-                  <div><span>Expected / student</span><b>{money(ev.target)}</b></div>
+                  <div><span>Collected</span><b>{money(total)}</b></div>
+                  <div><span>Paid entries</span><b>{paid}</b></div>
                 </div>
-                <div className="ev-progress"><i style={{width:`${Math.min(100,ev.students.length?paid/ev.students.length*100:0)}%`}}/></div>
-                <div className="ev-event-foot"><span>{paid} paid · {unpaid} unpaid</span><b>{Math.round((ev.students.length?paid/ev.students.length:0)*100)}%</b></div>
-                <button className="ev-btn secondary full" onClick={() => openEvent(ev.id)}>Open collection sheet <ChevronRight size={16}/></button>
+                <button className="ev-btn secondary full" onClick={() => { setSelected(event.id); setSearch(''); setFilter('All') }}>
+                  Open collection sheet <ChevronRight size={16} />
+                </button>
               </article>
             })}
           </div>
-        </>}
+        </> : <>
+          <button className="ev-back" onClick={() => setSelected(null)}><ArrowLeft size={16} /> All events</button>
 
-        {tab === 'Events & registers' && <>
-          {current ? <>
-            <button className="ev-back" onClick={() => {setSelected(null);setSearch('');setStatusFilter('All')}}><ArrowLeft size={16}/> All events</button>
-            <div className="ev-heading">
-              <div><div className="ev-kicker">EVENT COLLECTION SHEET</div><h1>{current.name}</h1><p>Separate student-by-student payment register · Event date: {current.date}</p></div>
-              <div className="ev-head-actions">
-                <button className="ev-btn secondary" onClick={exportCsv}><Download size={16}/> Export CSV</button>
-                <button className="ev-btn primary" onClick={() => setShowPayment(true)}><Plus size={16}/> Record payment</button>
+          <section className="ev-stats three">
+            <article><span>Total collected</span><b>{money(collected)}</b></article>
+            <article><span>Paid entries</span><b>{paidCount} <small>/ {students.length}</small></b></article>
+            <article><span>Unpaid entries</span><b>{unpaidCount}</b></article>
+          </section>
+
+          <section className="ev-register">
+            <div className="ev-register-head">
+              <div><h2>Student collection register</h2><p>Real student records · Payment values from Supabase</p></div>
+              <div className="ev-tools">
+                <label className="ev-search"><Search size={16} /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="Search roll no. or student" /></label>
+                <select value={filter} onChange={e => setFilter(e.target.value)}><option>All</option><option>Paid</option><option>Unpaid</option></select>
               </div>
             </div>
 
-            <section className="ev-stats three">
-              <article><span>Total amount collected</span><b>{money(currentStats!.collected)}</b></article>
-              <article><span>Paid status</span><b>{currentStats!.paid} <small>/ {current.students.length}</small></b></article>
-              <article><span>Unpaid status</span><b>{currentStats!.unpaid}</b></article>
-            </section>
+            {role === 'finance_manager' && <div style={{ padding: 12, display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+              <button className="ev-btn secondary" onClick={() => void initializeRegister(current)} disabled={busy}><RefreshCw size={16} /> Add missing student entries</button>
+              <button className="ev-btn secondary" onClick={exportCsv}><Download size={16} /> Export CSV</button>
+              <button className="ev-btn primary" onClick={() => { setPaymentId(''); setAmount(''); setShowPayment(true) }}><Plus size={16} /> Record payment</button>
+            </div>}
 
-            <section className="ev-register">
-              <div className="ev-register-head">
-                <div><h2>Student collection register</h2><p>Expected amount per student: {money(current.target)} · Collected by: {current.poc}</p></div>
-                <div className="ev-tools">
-                  <label className="ev-search"><Search size={16}/><input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search roll no. or student"/></label>
-                  <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}><option>All</option><option>Paid</option><option>Unpaid</option></select>
-                </div>
-              </div>
+            <div className="ev-table-scroll">
+              <table className="ev-table">
+                <thead><tr><th>S</th><th>Roll No</th><th>Name</th><th>Expected</th><th>Paid</th><th>Date</th><th>Method</th><th>Status</th><th>Action</th></tr></thead>
+                <tbody>{rows.map(({ student, contribution }, index) => {
+                  const paid = Number(contribution?.paid_pkr || 0)
 
-              <div className="ev-table-scroll">
-                <table className="ev-table">
-                  <thead><tr><th>S</th><th>Roll No</th><th>Name</th><th>Expected</th><th>Amount paid</th><th>POC</th><th>Date</th><th>Payment method</th><th>Status</th><th>Action</th></tr></thead>
-                  <tbody>{visibleStudents.map(s=><tr key={s.id}>
-                    <td>{current.students.findIndex(x=>x.id===s.id)+1}</td><td>{s.roll}</td><td className="ev-student-name">{s.name}</td>
-                    <td>{money(current.target)}</td><td className={s.paid?'ev-paid-amount':'ev-unpaid-amount'}>{money(s.paid?s.amount:0)}</td>
-                    <td>{s.poc}</td><td>{s.date||'—'}</td><td><span className="ev-method">{s.paid?s.method:'—'}</span></td>
-                    <td><span className={`ev-status ${s.paid?'paid':'unpaid'}`}>{s.paid?'Paid':'Unpaid'}</span></td>
-                    <td>{!s.paid && <button className="ev-row-action" onClick={()=>{setStudentId(String(s.id));setPaidAmount(String(current.target));setPayPoc(current.poc);setShowPayment(true)}}>Record</button>}</td>
-                  </tr>)}</tbody>
-                  <tfoot><tr><td colSpan={3}>TOTALS · {visibleStudents.length} shown / {current.students.length} students</td><td>{money(current.target*current.students.length)}</td><td>{money(currentStats!.collected)}</td><td colSpan={2}>Collected by: {current.poc}</td><td colSpan={3}>{currentStats!.paid} paid · {currentStats!.unpaid} unpaid</td></tr></tfoot>
-                </table>
-              </div>
-              <div className="ev-mobile-note">Tip: swipe the register table horizontally to view all columns.</div>
-            </section>
-
-            <section className="ev-total-banner"><div><span>Net collection for {current.name}</span><b>{money(currentStats!.collected)}</b><small>{currentStats!.paid} payments recorded · {currentStats!.unpaid} still unpaid</small></div><Wallet/></section>
-          </> : <>
-            <div className="ev-heading"><div><div className="ev-kicker">EVENT COLLECTION SHEETS</div><h1>Choose an event</h1><p>Every event is tracked independently; payments never mix between events.</p></div><button className="ev-btn primary" onClick={() => setShowEvent(true)}><Plus size={17}/> Create event</button></div>
-            <div className="ev-event-grid">{events.map(ev=><article className="ev-event-card" key={ev.id}><div className="ev-event-icon"><CalendarDays/></div><h3>{ev.name}</h3><p className="ev-event-date">{ev.date} · POC: {ev.poc}</p><button className="ev-btn secondary full" onClick={()=>openEvent(ev.id)}>Open collection sheet <ChevronRight size={16}/></button></article>)}</div>
-          </>}
+                  return <tr key={student.id}>
+                    <td>{index + 1}</td>
+                    <td>{student.roll_number}</td>
+                    <td className="ev-student-name">{student.full_name}</td>
+                    <td>{money(Number(contribution?.expected_pkr || 0))}</td>
+                    <td className={paid > 0 ? 'ev-paid-amount' : 'ev-unpaid-amount'}>{money(paid)}</td>
+                    <td>{contribution?.paid_on || '—'}</td>
+                    <td>{contribution?.payment_method || '—'}</td>
+                    <td><span className={`ev-status ${paid > 0 ? 'paid' : 'unpaid'}`}>{paid > 0 ? 'Paid' : 'Unpaid'}</span></td>
+                    <td>{role === 'finance_manager' && contribution && <button className="ev-row-action" onClick={() => {
+                      setPaymentId(contribution.id)
+                      setAmount(String(paid || contribution.expected_pkr || ''))
+                      setPaymentDate(today)
+                      setMethod('Cash')
+                      setShowPayment(true)
+                    }}>Record</button>}</td>
+                  </tr>
+                })}</tbody>
+              </table>
+            </div>
+            {!eventContributions.length && <div style={{ padding: 16 }}>
+              This event has no contribution entries yet. A finance manager can select “Add missing student entries”.
+            </div>}
+            <div className="ev-mobile-note">Swipe horizontally to view all columns.</div>
+          </section>
         </>}
 
-        <footer className="ev-footer">MrJ Treasury · PKR · Demo registers · Database saving not enabled yet</footer>
+        <footer className="ev-footer">MrJ Treasury · Supabase database · PKR</footer>
       </main>
 
-      {showPayment && current && <div className="ev-modal-back" onClick={() => setShowPayment(false)}>
-        <section className="ev-modal" onClick={e=>e.stopPropagation()}>
-          <button className="ev-modal-x" onClick={() => setShowPayment(false)}><X/></button>
-          <div className="ev-kicker">{current.name}</div><h2>Record student payment</h2><p>Updates this event's temporary demo register only.</p>
-          <form onSubmit={addPayment} className="ev-form">
-            <label>Student<select value={studentId} onChange={e=>setStudentId(e.target.value)} required><option value="">Select student</option>{current.students.map(s=><option key={s.id} value={s.id}>{s.roll} — {s.name}{s.paid?' (already paid)':''}</option>)}</select></label>
-            <label>Amount received (PKR)<input type="number" min="1" step="1" value={paidAmount} onChange={e=>setPaidAmount(e.target.value)} required/></label>
-            <label>Payment method<select value={method} onChange={e=>setMethod(e.target.value as PaymentMethod)}><option>Online</option><option>Cash</option><option>Bank transfer</option></select></label>
-            <label>Payment date<input type="date" value={payDate} onChange={e=>setPayDate(e.target.value)} required/></label>
-            <label>Collected by / POC<input value={payPoc} onChange={e=>setPayPoc(e.target.value)} required/></label>
-            <div className="ev-modal-actions"><button type="button" className="ev-btn secondary" onClick={()=>setShowPayment(false)}>Cancel</button><button className="ev-btn primary" type="submit"><CheckCircle2 size={16}/> Save demo payment</button></div>
+      {showEvent && <div className="ev-modal-back" onClick={() => setShowEvent(false)}>
+        <section className="ev-modal" onClick={e => e.stopPropagation()}>
+          <button className="ev-modal-x" onClick={() => setShowEvent(false)}><X /></button>
+          <div className="ev-kicker">NEW DATABASE REGISTER</div>
+          <h2>Create event</h2>
+          <p>This creates a separate unpaid entry for each current student.</p>
+          <form className="ev-form" onSubmit={createEvent}>
+            <label>Event name<input value={eventName} onChange={e => setEventName(e.target.value)} required /></label>
+            <label>Event date<input type="date" value={eventDate} onChange={e => setEventDate(e.target.value)} required /></label>
+            <label>Expected contribution per student (PKR)<input type="number" min="1" value={target} onChange={e => setTarget(e.target.value)} required /></label>
+            <div className="ev-modal-actions">
+              <button type="button" className="ev-btn secondary" onClick={() => setShowEvent(false)}>Cancel</button>
+              <button className="ev-btn primary" type="submit" disabled={busy}><Plus size={16} /> Save event</button>
+            </div>
           </form>
         </section>
       </div>}
 
-      {showEvent && <div className="ev-modal-back" onClick={() => setShowEvent(false)}>
-        <section className="ev-modal" onClick={e=>e.stopPropagation()}>
-          <button className="ev-modal-x" onClick={() => setShowEvent(false)}><X/></button>
-          <div className="ev-kicker">NEW SEPARATE REGISTER</div><h2>Create event</h2><p>A new event gets its own temporary student payment sheet.</p>
-          <form onSubmit={addEvent} className="ev-form">
-            <label>Event name<input value={eventName} onChange={e=>setEventName(e.target.value)} placeholder="e.g. Farewell Dinner" required/></label>
-            <label>Event date<input type="date" value={eventDate} onChange={e=>setEventDate(e.target.value)} required/></label>
-            <label>Expected contribution per student (PKR)<input type="number" min="1" value={eventTarget} onChange={e=>setEventTarget(e.target.value)} required/></label>
-            <label>Collected by / POC<input value={eventPoc} onChange={e=>setEventPoc(e.target.value)} required/></label>
-            <div className="ev-modal-actions"><button type="button" className="ev-btn secondary" onClick={()=>setShowEvent(false)}>Cancel</button><button className="ev-btn primary" type="submit"><Plus size={16}/> Create register</button></div>
+      {showPayment && current && <div className="ev-modal-back" onClick={() => setShowPayment(false)}>
+        <section className="ev-modal" onClick={e => e.stopPropagation()}>
+          <button className="ev-modal-x" onClick={() => setShowPayment(false)}><X /></button>
+          <div className="ev-kicker">{current.name}</div>
+          <h2>Record payment</h2>
+          <p>Only use this form for a payment you have actually received.</p>
+          <form className="ev-form" onSubmit={savePayment}>
+            <label>Student entry
+              <select value={paymentId} onChange={e => setPaymentId(e.target.value)} required>
+                <option value="">Select student</option>
+                {students.map(student => {
+                  const c = contributions.find(item => item.event_id === current.id && item.student_id === student.id)
+                  if (!c) return null
+                  return <option key={c.id} value={c.id}>{student.roll_number} — {student.full_name}</option>
+                })}
+              </select>
+            </label>
+            <label>Amount received (PKR)<input type="number" min="1" step="1" value={amount} onChange={e => setAmount(e.target.value)} required /></label>
+            <label>Payment method<select value={method} onChange={e => setMethod(e.target.value)}><option>Cash</option><option>Online</option><option>Bank transfer</option></select></label>
+            <label>Payment date<input type="date" value={paymentDate} onChange={e => setPaymentDate(e.target.value)} required /></label>
+            <div className="ev-modal-actions">
+              <button type="button" className="ev-btn secondary" onClick={() => setShowPayment(false)}>Cancel</button>
+              <button className="ev-btn primary" type="submit" disabled={busy}><CheckCircle2 size={16} /> Save payment</button>
+            </div>
           </form>
         </section>
       </div>}
